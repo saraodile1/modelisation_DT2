@@ -1,0 +1,213 @@
+project:
+  name: memoire_dt2_pipeline
+  random_state: 42
+
+paths:
+  # Fichier d'entree attendu par la partie scientifique du pipeline.
+  # Il doit deja etre structure comme la sortie du dossier Nettoyage:
+  # une ligne par patient, colonnes cliniques/biologiques, colonnes de doses
+  # medicamenteuses, et Profil_glycemique.
+  input_dataset: data/structured/classification_profile_glicemique.xlsx
+  # Utilise uniquement avec --skip-imputation: on reutilise alors la derniere
+  # sortie MissForest officielle au lieu de relancer l'algorithme.
+  existing_imputed_datasets: output_pipeline/imputed/missforest_dataset.pkl
+  output_dir: output_pipeline
+
+schema:
+  id_column:
+  profile_column: Profil_glycemique
+  clinical_columns:
+    - Age
+    - Sexe
+    - IMC
+    - TT
+    - PAS
+    - PAD
+    - HTA
+    - HTS/HTD
+    - Prot
+    - Creat
+    - HDL
+    - Totc
+    - LDLc
+    - TG
+    - Non HDL
+    - PCSK9
+    - Glu
+    - Ins (µUI/mL)
+    - HOMAB%
+    - HOMAS%
+    - HOMA-IR
+    - Adipo HMW
+    - Ratio Tot-c/HDL
+    - Ratio LDL-c/HDL
+    - Ratio TG/HDL
+    - Ratio LogTG/HDL
+    - lu(mmol/l)
+    - Insu pmol/L
+    - TNFa
+    - MDRD
+    - Creat mg/dl
+    - Creat µmol/L
+  categorical_columns:
+    - Sexe
+    - HTA
+    - HTS/HTD
+  antidiabetic_columns:
+    - Metformine 500 mg
+    - Glibenclamide 5mg
+    - Insuline 10 UI
+  # Liste explicite des colonnes de medicaments du dataset structure.
+  # Pour un autre dataset avec plus de medicaments, on ajoute les colonnes ici.
+  medication_columns:
+    - Aldomet 250 mg
+    - Amapine 10 mg
+    - Amapine 5 mg
+    - Amloprese 5 mg
+    - Atenolol 50 mg
+    - Captopril 50 mg
+    - Cardipic 5 mg
+    - Ena Denk 10 mg
+    - Eneas 5 mg
+    - Glibenclamide 5mg
+    - Insuline 10 UI
+    - Lasilix 40 mg
+    - Lexomil 6 mg
+    - Metformine 500 mg
+    - Nifilat 20 mg
+    - Nifédipine 20 mg
+    - Pregasafe 75 mg
+    - Simvastatine 20 mg
+    - Tanakan 120 mg
+    - Tranxène 5 mg
+    - Tritazide 5 mg
+  # Colonnes biologiques supplementaires pour un autre dataset.
+  # Elles seront protegees comme biomarqueurs et non interpretees comme medicaments.
+  additional_biomarker_columns: []
+
+cleaning:
+  missingness_exclusion_threshold: 0.70
+  helper_column_suffixes_to_drop: []
+  helper_columns_to_drop: []
+  forced_excluded_columns:
+    - TNFa
+    - MDRD
+    - Creat
+    - Creat mg/dl
+    - Creat µmol/L
+  sentinel_missing:
+    # Convention propre a ce dataset: -1 = medicament pris, dose inconnue.
+    # Un autre dataset peut mettre une autre valeur, ou null si cette convention
+    # n'existe pas.
+    medication_taken_unknown_dose: -1
+    numeric_zero_as_missing:
+      - Age
+      - Creat mg/dl
+      - Creat µmol/L
+      - TT
+      - HDL
+      - TG
+    text_as_missing:
+      - Unable to calculate
+  harmonization:
+    HTA:
+      non: NON
+    HTS/HTD:
+      false: NON
+      False: NON
+      false_boolean: NON
+
+derived_variables:
+  recalculate_after_imputation:
+    - Ratio Tot-c/HDL
+    - Ratio LDL-c/HDL
+    - Ratio TG/HDL
+    - Ratio LogTG/HDL
+    - Insu pmol/L
+    - lu(mmol/l)
+    - HOMAS%
+  redundant_predictors_to_exclude:
+    - Age
+    - Sexe_bin
+    - HTA_bin
+    - HTS_HTD_HTD
+    - HTS_HTD_HTS
+    - HTS_HTD_HTSD
+    - HTS_HTD_NON
+    - HTS_HTD_false
+    - Ratio Tot-c/HDL
+    - Ratio TG/HDL
+    - Ratio LogTG/HDL
+    - Ratio LDL-c/HDL
+    - LDLc
+    - Insu pmol/L
+    - lu(mmol/l)
+
+feature_engineering:
+  friedewald_ldl:
+    enabled: true
+    output_column: LDLc_Friedewald
+    # Unite coherente avec le dataset actuel: LDL-C = Cholesterol total - HDL - TG/5.
+    triglyceride_divisor: 5
+
+imputation:
+  enabled: true
+  method: missforest
+  missforest:
+    n_estimators: 100
+    max_depth:
+    max_iter: 10
+  medication_positive_redraw:
+    enabled: true
+    columns:
+      - Metformine 500 mg
+      - Glibenclamide 5mg
+
+target:
+  # Cible secondaire: intensification/escalade therapeutique.
+  # Elle n'est pas une reponse therapeutique longitudinale avant/apres traitement.
+  name: Escalade_therapeutique
+  descriptive_name: Niveau_therapeutique
+  none_label: Aucun
+  mono_label: Monotherapie
+  bi_label: Bitherapie
+  tri_label: Tritherapie
+  # 0 = absence d'intensification observee: aucun traitement ou monotherapie.
+  # 1 = intensification observee: bitherapie ou tritherapie.
+  exclude_zero_antidiabetic_patients: false
+  glycemic_control:
+    name: Controle_glycemique_binaire
+    favorable_label: Bon_controle
+    unfavorable_label: Mauvais_controle
+    favorable_profiles:
+      - Normoglycemie
+      - Hypoglycemie
+    unfavorable_profiles:
+      - Hyperglycemie moderee / Prediabete
+      - Hyperglycemie / Diabete
+    excluded_profiles: []
+    # Evite une fuite logique: Glu sert directement au statut glycemique.
+    excluded_predictors:
+      - Glu
+      - lu(mmol/l)
+
+modeling:
+  enabled: true
+  test_size: 0.25
+  cross_validation:
+    enabled: true
+    n_splits: 5
+  classifiers:
+    - random_forest
+    - xgboost
+  random_forest:
+    n_estimators: 300
+    max_depth: 5
+    min_samples_leaf: 5
+  xgboost:
+    n_estimators: 200
+    max_depth: 3
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
